@@ -21,6 +21,8 @@ limitations under the License.
 
 #include <functional>
 #include <memory>
+#include <mutex>
+#include "tbb/concurrent_hash_map.h"
 
 #include "scap.h"
 
@@ -38,7 +40,9 @@ limitations under the License.
 class sinsp_container_manager
 {
 public:
-	using map_ptr_t = const std::unordered_map<std::string, sinsp_container_info::ptr_t>*;
+	using map_ptr_t = const tbb::concurrent_hash_map<const std::string, sinsp_container_info::ptr_t>*;
+	using map_acc_t = tbb::concurrent_hash_map<const std::string, sinsp_container_info::ptr_t>::accessor;
+	using const_map_acc_t = tbb::concurrent_hash_map<const std::string, sinsp_container_info::ptr_t>::const_accessor;
 
 	sinsp_container_manager(sinsp* inspector);
 	virtual ~sinsp_container_manager();
@@ -111,8 +115,10 @@ public:
 	void identify_category(sinsp_threadinfo *tinfo);
 
 	bool container_exists(const std::string& container_id) const {
-		return m_containers.find(container_id) != m_containers.end() ||
-			m_lookups.find(container_id) != m_lookups.end();
+		const_map_acc_t acc;
+		bool res = m_containers.find(acc, container_id);
+
+		return res || m_lookups.find(container_id) != m_lookups.end();
 	}
 
 	typedef std::function<void(const sinsp_container_info&, sinsp_threadinfo *)> new_container_cb;
@@ -168,6 +174,7 @@ public:
 		auto engine_lookup = container_lookups->second.find(ctype);
 		return engine_lookup == container_lookups->second.end();
 	}
+
 private:
 	std::string container_to_json(const sinsp_container_info& container_info);
 	bool container_to_sinsp_event(const std::string& json, sinsp_evt* evt, std::shared_ptr<sinsp_threadinfo> tinfo);
@@ -176,8 +183,12 @@ private:
 	std::list<std::unique_ptr<libsinsp::container_engine::resolver>> m_container_engines;
 
 	sinsp* m_inspector;
-	std::unordered_map<std::string, std::shared_ptr<const sinsp_container_info>> m_containers;
+
+	// tbb concurrent hash map is not thread-safe for concurrent deletions *and* iterations, but other threads are never iterating,
+	// so we are good.
+	tbb::concurrent_hash_map<const std::string, std::shared_ptr<const sinsp_container_info>> m_containers;
 	std::unordered_map<std::string, std::unordered_map<sinsp_container_type, sinsp_container_lookup_state>> m_lookups;
+
 	uint64_t m_last_flush_time_ns;
 	std::list<new_container_cb> m_new_callbacks;
 	std::list<remove_container_cb> m_remove_callbacks;

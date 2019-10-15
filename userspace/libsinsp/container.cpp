@@ -74,21 +74,27 @@ bool sinsp_container_manager::remove_inactive_containers()
 			return true;
 		});
 
-		for(auto it = m_containers.begin(); it != m_containers.end();)
+		std::list<std::string> to_delete;
+		for(const auto &it : m_containers)
 		{
-			if(containers_in_use.find(it->first) == containers_in_use.end())
+			if(containers_in_use.find(it.first) == containers_in_use.end())
 			{
-				sinsp_container_info::ptr_t container = it->second;
-				for(const auto &remove_cb : m_remove_callbacks)
-				{
-					remove_cb(*container);
-				}
-				m_containers.erase(it++);
+				to_delete.push_back(it.first);
 			}
-			else
+		}
+		for(const auto &it : to_delete)
+		{
+			const_map_acc_t acc;
+			if(!m_containers.find(acc, it)) {
+				continue;
+			}
+			for(const auto &remove_cb : m_remove_callbacks)
 			{
-				++it;
+				remove_cb(*acc->second);
 			}
+			acc.release();
+
+			m_containers.erase(it);
 		}
 	}
 
@@ -97,10 +103,10 @@ bool sinsp_container_manager::remove_inactive_containers()
 
 sinsp_container_info::ptr_t sinsp_container_manager::get_container(const string& container_id) const
 {
-	auto it = m_containers.find(container_id);
-	if(it != m_containers.end())
+	const_map_acc_t acc;
+	if(m_containers.find(acc, container_id))
 	{
-		return it->second;
+		return acc->second;
 	}
 
 	return nullptr;
@@ -283,7 +289,9 @@ sinsp_container_manager::map_ptr_t sinsp_container_manager::get_containers() con
 void sinsp_container_manager::add_container(const sinsp_container_info::ptr_t& container_info, sinsp_threadinfo *thread)
 {
 	set_lookup_status(container_info->m_id, container_info->m_type, container_info->m_lookup_state);
-	m_containers[container_info->m_id] = container_info;
+
+	m_containers.erase(container_info->m_id);
+	m_containers.emplace(std::make_pair(container_info->m_id,container_info));
 
 	for(const auto &new_cb : m_new_callbacks)
 	{
@@ -293,8 +301,13 @@ void sinsp_container_manager::add_container(const sinsp_container_info::ptr_t& c
 
 void sinsp_container_manager::replace_container(const sinsp_container_info::ptr_t& container_info)
 {
-	ASSERT(m_containers.find(container_info->m_id) != m_containers.end());
-	m_containers[container_info->m_id] = container_info;
+	const_map_acc_t acc;
+	bool res = m_containers.find(acc, container_info->m_id);
+	ASSERT(res);
+	if(res) {
+		m_containers.erase(container_info->m_id);
+	}
+	m_containers.emplace(std::make_pair(container_info->m_id,container_info));
 }
 
 void sinsp_container_manager::notify_new_container(const sinsp_container_info& container_info)
